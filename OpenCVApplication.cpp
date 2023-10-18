@@ -75,7 +75,7 @@ LineEq calculateLineEq(Point a, Point b)
     return { a.y - b.y, b.x - a.x, 1LL*a.x * b.y - 1LL*a.y * b.x };
 }
 
-float calculateLineDist(LineEq line, Point p)
+float calculateLineDist(LineEq const &line, Point p)
 {
     double a, b, c;
     std::tie(a, b, c) = line;
@@ -125,8 +125,6 @@ int main()
         totalTrials = (int)(log(1 - targetCertainty) / log(1 - pow(expectedInliers, sampleSize)));
         consensusSize = (int)(expectedInliers * points.size());
 
-        //std::cout << "Targets: " << totalTrials << ' ' << consensusSize << '\n';
-
         // Test samples
         while (totalTrials-- && bestConsensus < consensusSize)
         {
@@ -134,14 +132,15 @@ int main()
             do {
                 p1 = points.at(uDist(engine));
                 p2 = points.at(uDist(engine));
-            } while (usedSamples.find({p1.x, p1.y, p2.x, p2.y}) != usedSamples.end() 
-                || usedSamples.find({ p2.x, p2.y, p1.x, p1.y }) != usedSamples.end());
+            } while (usedSamples.count({p1.x, p1.y, p2.x, p2.y}) != 0 
+                || usedSamples.count({ p2.x, p2.y, p1.x, p1.y }) != 0
+                || p1 == p2);
             usedSamples.insert({ p1.x, p1.y, p2.x, p2.y });
 
             crtConsensus = 0;
             crtParams = calculateLineEq(p1, p2);
             for (auto p : points)
-                crtConsensus += (calculateLineDist(crtParams, p) < distThreshold);
+                crtConsensus += (calculateLineDist(crtParams, p) <= distThreshold);
             //std::cout << p1 << ' ' << p2 << " -> " << crtConsensus << '\n';
 
             if (crtConsensus > bestConsensus)
@@ -153,18 +152,17 @@ int main()
 
         double a, b, c;
         std::tie(a, b, c) = bestParams;
-        //if (b)
-        //{
+        if (abs(b) > 10)
+        {
             p1 = { 0,  (int)(-c / b) };
             p2 = { img.cols - 1, (int)-(1LL*((img.cols - 1) * a + c) / b) };
-            line(img, p1, p2, {0, 0, 0});
-        //}
-        //else
-        //{
+        }
+        else
+        {
             p1 = { (int)(-c / a), 0};
             p2 = { (int)-((1LL*(img.rows - 1) * b + c) / a), img.rows - 1 };
-            line(img, p1, p2, {0, 0, 0});
-        //}
+        }
+        line(img, p1, p2, {0, 0, 0});
         //std::cout << "Line equation: " << a << ' ' << b << ' ' << c << '\n';
         //std::cout << "Finally: " << p1 << ' ' << p2 << '\n';
 
