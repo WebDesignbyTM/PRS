@@ -23,11 +23,12 @@ struct LocalPeak
 };
 RNGeng engine;
 std::string INPUT_PREFIX = "c:\\Users\\logoeje\\source\\repos\\PRS\\Inputs\\";
-std::string LAB_FOLDER = "lab3\\";
-std::string FILE_NAME = "edge_";
-std::string TEST_NAME[] = {"simple", "complex"};
-//int NO_TESTS = 6;
-int NO_TESTS = 2;
+std::string LAB_FOLDER = "lab4\\";
+std::string DT_FOLDER = "DT\\";
+std::string PM_FOLDER = "PatternMatching\\";
+std::string CONTOURS[] = { "contour1", "contour2", "contour3" };
+std::string OBJECTS[] = { "template", "unknown_object1", "unknown_object2" };
+int NO_TESTS = 3;
 
 std::pair <float, float> calculateParameters(int noPoints, std::vector<Point2f> const &points)
 {
@@ -112,77 +113,125 @@ void findLocalMax(Mat_<int> const &src, int i, int j, int l, std::vector<LocalPe
 
 float rad(const int degree) { return degree * (PI / 180.0); }
 
+bool isInside(Mat const& img, int i, int j)
+{
+    return 0 <= i && i < img.rows && 0 <= j && j < img.cols;
+}
+
+Mat_<uchar> computeDT(Mat_<uchar> const& orig)
+{
+    int di[] = { -1, -1, -1, 0, 0, 0, 1, 1, 1 };
+    int dj[] = { -1, 0, 1, -1, 0, 1, -1, 0, 1 };
+    int weights[] = { 3, 2, 3, 2, 0, 2, 3, 2, 3 };
+    int maxDist;
+    Mat_<uchar> dist;
+
+    orig.copyTo(dist);
+    maxDist = 0;
+
+    for (int i = 0; i < dist.rows; ++i)
+        for (int j = 0; j < dist.cols; ++j)
+            for (int k = 0; k < 5; ++k)
+                if (isInside(dist, i + di[k], j + dj[k]))
+                    dist(i, j) = min(dist(i, j), dist(i + di[k], j + dj[k]) + weights[k]);
+
+    for (int i = dist.rows - 1; i >= 0; --i)
+        for (int j = dist.cols - 1; j >= 0; --j)
+        {
+            for (int k = 8; k >= 4; --k)
+                if (isInside(dist, i + di[k], j + dj[k]))
+                    dist(i, j) = min(dist(i, j), dist(i + di[k], j + dj[k]) + weights[k]);
+            maxDist = max(maxDist, dist(i, j));
+        }
+
+    return dist;
+}
+
+float computeMatchingScore(Mat_<uchar> const& dtMat, Mat_<uchar> const& sample)
+{
+    float total = 0;
+    int count = 0;
+    for (int i = 0; i < sample.rows; ++i)
+        for (int j = 0; j < sample.cols; ++j)
+            if (!sample(i, j))
+                total += dtMat(i, j), ++count;
+
+    return total / count;
+}
+
+Mat_<uchar> translateImage(Mat_<uchar> orig, int y, int x)
+{
+    Mat_<uchar> res = Mat_<uchar>(orig.rows, orig.cols, 255);
+
+    for (int i = 0; i < orig.rows; ++i)
+        for (int j = 0; j < orig.cols; ++j)
+            if (!orig(i, j) && isInside(res, i + y, j + x))
+                res(i + y, j + x) = orig(i, j);
+                
+    return res;
+}
+
+Point calculateCom(Mat_<uchar> orig)
+{
+    Point total = { 0, 0 };
+    int count = 0;
+    for (int i = 0; i < orig.rows; ++i)
+        for (int j = 0; j < orig.cols; ++j)
+            if (!orig(i, j))
+            {
+                total.y += i;
+                total.x += j;
+                ++count;
+            }
+
+    return { total.x / count, total.y / count };
+}
+
 int main()
 {
     std::string fpath;
     Mat_<uchar> img;
-    Mat_<Vec3b> displayImg;
-    Mat_<int> H;
-    Mat_<uchar> displayH;
-    std::vector<LocalPeak> localMax;
-    float ro;
-    float diagonal;
-    float maxFreq;
-    float resolutionEPS = 0.1f;
+    Mat_<uchar> sample;
+    Mat_<uchar> res;
+    float matchingScore;
+    Point center1;
+    Point center2;
 
     for (int testNo = 0; testNo < NO_TESTS; ++testNo)
     {
-        // Initialize
-        fpath = INPUT_PREFIX + LAB_FOLDER + FILE_NAME + TEST_NAME[testNo] + ".bmp";
+        fpath = INPUT_PREFIX + LAB_FOLDER + DT_FOLDER + CONTOURS[testNo] + ".bmp";
         img = imread(fpath, CV_LOAD_IMAGE_GRAYSCALE);
-        diagonal = sqrt(img.rows * img.rows + img.cols * img.cols);
-        H = Mat_<int>((int) diagonal, 360);
-        displayH = Mat_<uchar>((int) diagonal, 360);
-        H.setTo(0);
-        displayH.setTo(0);
-        maxFreq = 0;
-        localMax.clear();
+        res = computeDT(img);
+        imshow("Result", res);
+        waitKey(0);
+    }
 
-        for (int i = 0; i < img.rows; ++i)
-            for (int j = 0; j < img.cols; ++j)
-                if (img(i, j))
-                    for (float theta = 0; theta < 360; ++theta)
-                    {
-                        ro = j * cos(theta * PI / 180.0f) + i * sin(theta * PI / 180.0f);
-                        if (0 < ro && ro < H.rows)
-                            maxFreq = max(maxFreq, ++H((int)ro, (int)theta));
-                    }
+    fpath = INPUT_PREFIX + LAB_FOLDER + PM_FOLDER + OBJECTS[0] + ".bmp";
+    img = imread(fpath, CV_LOAD_IMAGE_GRAYSCALE);
+    res = computeDT(img);
 
-        for (int i = 0; i < H.rows; ++i)
-            for (int j = 0; j < H.cols; ++j)
-                displayH(i, j) = (255.0f * H(i, j)) / maxFreq;
+    for (int testNo = 1; testNo < NO_TESTS; ++testNo)
+    {
+        fpath = INPUT_PREFIX + LAB_FOLDER + PM_FOLDER + OBJECTS[testNo] + ".bmp";
+        sample = imread(fpath, CV_LOAD_IMAGE_GRAYSCALE);
+        matchingScore = computeMatchingScore(res, sample);
 
-        //imshow("Frequencies", displayH);
-        //waitKey(0);
+        imshow("Original", img);
+        imshow("Distance transform", res);
+        imshow("Sample", sample);
+        std::cout << "The matching score for " + fpath + " is " << matchingScore << '\n';
+        waitKey(0);
 
-        for (int k = 3; k < 15; k += 4) {
-            localMax.clear();
-            for (int i = 0; i < displayH.rows; ++i)
-                for (int j = 0; j < displayH.cols; ++j)
-                {
-                    findLocalMax(H, i, j, k, localMax);
-                }
-            displayImg = Mat_<Vec3b>(img.rows, img.cols);
-            for (int i = 0; i < displayImg.rows; ++i)
-                for (int j = 0; j < displayImg.cols; ++j)
-                    displayImg(i, j) = { img(i, j), img(i, j), img(i, j) };
-            std::sort(localMax.begin(), localMax.end());
-            for (int lines = 0; lines < min(10, localMax.size()); ++lines)
-            {
+        center1 = calculateCom(img);
+        center2 = calculateCom(sample);
+        sample = translateImage(sample, center1.y - center2.y, center1.x - center2.x);
+        matchingScore = computeMatchingScore(res, sample);
 
-                Point pt1, pt2;
-                double a = cos(rad(localMax.at(lines).theta)), b = sin(rad(localMax.at(lines).theta));
-                double x0 = a * localMax.at(lines).ro, y0 = b * localMax.at(lines).ro;
-                pt1.x = cvRound(x0 + 1000 * (-b));
-                pt1.y = cvRound(y0 + 1000 * (a));
-                pt2.x = cvRound(x0 - 1000 * (-b));
-                pt2.y = cvRound(y0 - 1000 * (a));
-                line(displayImg, pt1, pt2, { 0, 0, 255 });
-            }
-            imshow("Result", displayImg);
-            waitKey(0);
-        }
-
+        imshow("Original", img);
+        imshow("Distance transform", res);
+        imshow("Sample", sample);
+        std::cout << "The matching score for the translated " + fpath + " is " << matchingScore << '\n';
+        waitKey(0);
     }
 
 	return 0;
