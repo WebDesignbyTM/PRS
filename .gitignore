@@ -361,3 +361,8 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+/Inputs/lab5
+/correlation.csv
+/covariance.csv
+/devations.csv
+/means.csv

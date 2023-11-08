@@ -5,11 +5,13 @@
 #include "common.h"
 #include <ctime>
 #include <fstream>
+#include <filesystem>
 #include <iostream>
 #include <random>
 #include <set>
 #include <tuple>
 #include <vector>
+namespace fs = std::filesystem;
 
 typedef std::tuple <float, float, float> LineEq;
 typedef std::mt19937 RNGeng;
@@ -23,12 +25,7 @@ struct LocalPeak
 };
 RNGeng engine;
 std::string INPUT_PREFIX = "c:\\Users\\logoeje\\source\\repos\\PRS\\Inputs\\";
-std::string LAB_FOLDER = "lab4\\";
-std::string DT_FOLDER = "DT\\";
-std::string PM_FOLDER = "PatternMatching\\";
-std::string CONTOURS[] = { "contour1", "contour2", "contour3" };
-std::string OBJECTS[] = { "template", "unknown_object1", "unknown_object2" };
-int NO_TESTS = 3;
+std::string LAB_FOLDER = "lab5\\";
 
 std::pair <float, float> calculateParameters(int noPoints, std::vector<Point2f> const &points)
 {
@@ -189,48 +186,92 @@ Point calculateCom(Mat_<uchar> orig)
 
 int main()
 {
-    std::string fpath;
-    Mat_<uchar> img;
-    Mat_<uchar> sample;
-    Mat_<uchar> res;
-    float matchingScore;
-    Point center1;
-    Point center2;
+    const int IMAGE_ROWS = 19;
+    const int IMAGE_COLS = 19;
+    const int TOTAL_IMAGES = 400;
+    int totalFeatures = IMAGE_ROWS * IMAGE_COLS;
+    std::ofstream means_file("means.csv");
+    std::ofstream deviations_file("devations.csv");
+    std::ofstream covariance_file("covariance.csv");
+    std::ofstream correlation_file("correlation.csv");
 
-    for (int testNo = 0; testNo < NO_TESTS; ++testNo)
+    std::string fpath;
+    Mat_<uchar> I = Mat(TOTAL_IMAGES, totalFeatures, CV_8UC1);
+    Mat_<uchar> img;
+    Mat_<uchar> chart = Mat(256, 256, CV_8UC1);;
+    Mat_<double> covariance = Mat(totalFeatures, totalFeatures, CV_64FC1);
+    Mat_<double> correlation = Mat(totalFeatures, totalFeatures, CV_64FC1);
+    std::vector<double> means, stdDeviations;
+    // 5 * 19 + 4 = 99, 5 * 19 + 14 = 109; 0.94
+    // 10 * 19 + 3 = 193, 9 * 19 + 15 = 186; 0.84
+    // 5 * 19 + 4 = 99, 18 * 19 + 0 = 342; 0.07
+    std::vector<std::pair<int, int>> chartIndices({ {99, 109}, {193, 186}, {99, 342} });
+    double mean, stdDeviation;
+    int k = 0;
+    int baseY, baseX;
+
+    fpath = INPUT_PREFIX + LAB_FOLDER;
+    covariance.setTo(0);
+    correlation.setTo(0);
+
+    for (const auto& entry : fs::directory_iterator(fpath))
     {
-        fpath = INPUT_PREFIX + LAB_FOLDER + DT_FOLDER + CONTOURS[testNo] + ".bmp";
-        img = imread(fpath, CV_LOAD_IMAGE_GRAYSCALE);
-        res = computeDT(img);
-        imshow("Result", res);
-        waitKey(0);
+        img = imread(entry.path().string(), CV_LOAD_IMAGE_GRAYSCALE);
+        mean = 0;
+        stdDeviation = 0;
+
+        for (int i = 0; i < img.rows; ++i)
+            for (int j = 0; j < img.cols; ++j)
+                I(k, i * IMAGE_COLS + j) = img(i, j);
+
+        ++k;
     }
 
-    fpath = INPUT_PREFIX + LAB_FOLDER + PM_FOLDER + OBJECTS[0] + ".bmp";
-    img = imread(fpath, CV_LOAD_IMAGE_GRAYSCALE);
-    res = computeDT(img);
-
-    for (int testNo = 1; testNo < NO_TESTS; ++testNo)
+    for (int i = 0; i < totalFeatures; ++i)
     {
-        fpath = INPUT_PREFIX + LAB_FOLDER + PM_FOLDER + OBJECTS[testNo] + ".bmp";
-        sample = imread(fpath, CV_LOAD_IMAGE_GRAYSCALE);
-        matchingScore = computeMatchingScore(res, sample);
+        mean = 0;
+        stdDeviation = 0;
 
-        imshow("Original", img);
-        imshow("Distance transform", res);
-        imshow("Sample", sample);
-        std::cout << "The matching score for " + fpath + " is " << matchingScore << '\n';
-        waitKey(0);
+        for (k = 0; k < TOTAL_IMAGES; ++k)
+            mean += I(k, i);
+        mean /= TOTAL_IMAGES;
 
-        center1 = calculateCom(img);
-        center2 = calculateCom(sample);
-        sample = translateImage(sample, center1.y - center2.y, center1.x - center2.x);
-        matchingScore = computeMatchingScore(res, sample);
+        for (k = 0; k < TOTAL_IMAGES; ++k)
+            stdDeviation += pow(I(k, i) - mean, 2);
 
-        imshow("Original", img);
-        imshow("Distance transform", res);
-        imshow("Sample", sample);
-        std::cout << "The matching score for the translated " + fpath + " is " << matchingScore << '\n';
+        stdDeviation = sqrt(stdDeviation / TOTAL_IMAGES);
+
+        means.push_back(mean);
+        stdDeviations.push_back(stdDeviation);
+
+        means_file << mean << ",";
+        deviations_file << stdDeviation << ",";
+    }
+
+    for (int i = 0; i < totalFeatures; ++i)
+    {
+        for (int j = 0; j < totalFeatures; ++j)
+        {
+            for (int k = 0; k < TOTAL_IMAGES; ++k)
+                covariance(i, j) += (I(k, i) - means.at(i)) * (I(k, j) - means.at(j));
+            
+            covariance(i, j) /= TOTAL_IMAGES;
+            correlation(i, j) = covariance(i, j) / (stdDeviations.at(i) * stdDeviations.at(j));
+
+            covariance_file << covariance(i, j) << ",";
+            correlation_file << correlation(i, j) << ",";
+        }
+        covariance_file << "\n";
+        correlation_file << "\n";
+    }
+
+    for (auto p : chartIndices)
+    {
+        chart.setTo(255);
+        for (k = 0; k < TOTAL_IMAGES; ++k)
+            chart(I(k, p.second), I(k, p.first)) = 0;
+        std::cout << "The correlation coefficient is " << correlation(p.first, p.second) << '\n';
+        imshow("Correlation chart", chart);
         waitKey(0);
     }
 
