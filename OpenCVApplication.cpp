@@ -11,6 +11,7 @@
 #include <set>
 #include <tuple>
 #include <vector>
+#include <limits>
 namespace fs = std::filesystem;
 
 typedef std::tuple <float, float, float> LineEq;
@@ -25,7 +26,9 @@ struct LocalPeak
 };
 RNGeng engine;
 std::string INPUT_PREFIX = "c:\\Users\\logoeje\\source\\repos\\PRS\\Inputs\\";
-std::string LAB_FOLDER = "lab5\\";
+std::string LAB_FOLDER = "lab6\\";
+std::string INPUT_FILES[] = { "pca2d.txt", "pca3d.txt" };
+const int TOTAL_TESTS = 2;
 
 std::pair <float, float> calculateParameters(int noPoints, std::vector<Point2f> const &points)
 {
@@ -186,92 +189,82 @@ Point calculateCom(Mat_<uchar> orig)
 
 int main()
 {
-    const int IMAGE_ROWS = 19;
-    const int IMAGE_COLS = 19;
-    const int TOTAL_IMAGES = 400;
-    int totalFeatures = IMAGE_ROWS * IMAGE_COLS;
-    std::ofstream means_file("means.csv");
-    std::ofstream deviations_file("devations.csv");
-    std::ofstream covariance_file("covariance.csv");
-    std::ofstream correlation_file("correlation.csv");
-
-    std::string fpath;
-    Mat_<uchar> I = Mat(TOTAL_IMAGES, totalFeatures, CV_8UC1);
+    int noPoints, dimensions;
+    double aux;
+    Mat_<double> points;
+    Mat_<double> covariance;
+    Mat_<double> lambda;
+    Mat_<double> q;
+    Mat_<double> coefficients;
+    Mat_<double> pca;
     Mat_<uchar> img;
-    Mat_<uchar> chart = Mat(256, 256, CV_8UC1);;
-    Mat_<double> covariance = Mat(totalFeatures, totalFeatures, CV_64FC1);
-    Mat_<double> correlation = Mat(totalFeatures, totalFeatures, CV_64FC1);
-    std::vector<double> means, stdDeviations;
-    // 5 * 19 + 4 = 99, 5 * 19 + 14 = 109; 0.94
-    // 10 * 19 + 3 = 193, 9 * 19 + 15 = 186; 0.84
-    // 5 * 19 + 4 = 99, 18 * 19 + 0 = 342; 0.07
-    std::vector<std::pair<int, int>> chartIndices({ {99, 109}, {193, 186}, {99, 342} });
-    double mean, stdDeviation;
-    int k = 0;
-    int baseY, baseX;
+    double minX, maxX, minY, maxY, minZ, maxZ;
+    std::vector <double> meanVector;
+    int finalDimensions[] = { 2, 3 };
 
-    fpath = INPUT_PREFIX + LAB_FOLDER;
-    covariance.setTo(0);
-    correlation.setTo(0);
-
-    for (const auto& entry : fs::directory_iterator(fpath))
+    for (int noTest = 0; noTest < TOTAL_TESTS; ++noTest)
     {
-        img = imread(entry.path().string(), CV_LOAD_IMAGE_GRAYSCALE);
-        mean = 0;
-        stdDeviation = 0;
+        std::ifstream fi(INPUT_PREFIX + LAB_FOLDER + INPUT_FILES[noTest]);
+        meanVector.clear();
+        minX = minY = minZ = FLT_MAX;
+        maxX = maxY = maxZ = FLT_MIN;
 
-        for (int i = 0; i < img.rows; ++i)
-            for (int j = 0; j < img.cols; ++j)
-                I(k, i * IMAGE_COLS + j) = img(i, j);
+        fi >> noPoints >> dimensions;
+        points = Mat_<double>(noPoints, dimensions);
 
-        ++k;
-    }
+        for (int i = 0; i < dimensions; ++i)
+            meanVector.push_back(0);
 
-    for (int i = 0; i < totalFeatures; ++i)
-    {
-        mean = 0;
-        stdDeviation = 0;
+        for (int i = 0; i < noPoints; ++i)
+            for (int j = 0; j < dimensions; ++j)
+            {
+                fi >> points(i, j);
+                meanVector.at(j) += points(i, j);
+            }
 
-        for (k = 0; k < TOTAL_IMAGES; ++k)
-            mean += I(k, i);
-        mean /= TOTAL_IMAGES;
+        // Calculate the mean vector
+        for (int i = 0; i < dimensions; ++i)
+            meanVector.at(i) /= noPoints;
 
-        for (k = 0; k < TOTAL_IMAGES; ++k)
-            stdDeviation += pow(I(k, i) - mean, 2);
+        // Subtract the mean vector
+        for (int i = 0; i < noPoints; ++i)
+            for (int j = 0; j < dimensions; ++j)
+                points(i, j) -= meanVector.at(j);
 
-        stdDeviation = sqrt(stdDeviation / TOTAL_IMAGES);
+        // Calculate the covariance
+        covariance = points.t() * points / ((double)noPoints - 1);
 
-        means.push_back(mean);
-        stdDeviations.push_back(stdDeviation);
+        // Perform eigenvalue decomposition
+        eigen(covariance, lambda, q);
+        q = q.t();
 
-        means_file << mean << ",";
-        deviations_file << stdDeviation << ",";
-    }
+        //coefficients = q(Rect(0, 0, dimensions, finalDimensions[noTest])).t();
+        coefficients = points * q;
+        //pca = points * coefficients;
+        pca = coefficients * q.t();
 
-    for (int i = 0; i < totalFeatures; ++i)
-    {
-        for (int j = 0; j < totalFeatures; ++j)
+        for (int i = 0; i < coefficients.rows; ++i)
         {
-            for (int k = 0; k < TOTAL_IMAGES; ++k)
-                covariance(i, j) += (I(k, i) - means.at(i)) * (I(k, j) - means.at(j));
-            
-            covariance(i, j) /= TOTAL_IMAGES;
-            correlation(i, j) = covariance(i, j) / (stdDeviations.at(i) * stdDeviations.at(j));
-
-            covariance_file << covariance(i, j) << ",";
-            correlation_file << correlation(i, j) << ",";
+            minX = min(minX, coefficients(i, 0));
+            minY = min(minY, coefficients(i, 1));
+            minZ = min(minZ, coefficients(i, 2));
+            maxX = max(maxX, coefficients(i, 0));
+            maxY = max(maxY, coefficients(i, 1));
+            maxZ = max(maxZ, coefficients(i, 2));
         }
-        covariance_file << "\n";
-        correlation_file << "\n";
-    }
 
-    for (auto p : chartIndices)
-    {
-        chart.setTo(255);
-        for (k = 0; k < TOTAL_IMAGES; ++k)
-            chart(I(k, p.second), I(k, p.first)) = 0;
-        std::cout << "The correlation coefficient is " << correlation(p.first, p.second) << '\n';
-        imshow("Correlation chart", chart);
+        img = Mat_<uchar>(maxX - minX + 1, maxY - minY + 1);
+        img.setTo(255);
+
+        std::cout << minX << ' ' << maxX << ' ' << minY << ' ' << maxY << '\n';
+
+        for (int i = 0; i < coefficients.rows; ++i)
+            if (!noTest)
+                img(coefficients(i, 0) - minX, coefficients(i, 1) - minY) = 0;
+            else
+                img(coefficients(i, 0) - minX, coefficients(i, 1) - minY) = 255 - (coefficients(i, 2) - minZ) / (maxZ - minZ) * 255;
+
+        imshow("Result", img);
         waitKey(0);
     }
 
