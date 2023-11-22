@@ -24,11 +24,11 @@ struct LocalPeak
         return hval > other.hval;
     }
 };
-RNGeng engine;
+RNGeng engine(100);
 std::string INPUT_PREFIX = "c:\\Users\\logoeje\\source\\repos\\PRS\\Inputs\\";
-std::string LAB_FOLDER = "lab6\\";
-std::string INPUT_FILES[] = { "pca2d.txt", "pca3d.txt" };
-const int TOTAL_TESTS = 2;
+std::string LAB_FOLDER = "lab7\\";
+std::string INPUT_FILES[] = { "points", "pca3d.txt" };
+const int TOTAL_TESTS = 5;
 
 std::pair <float, float> calculateParameters(int noPoints, std::vector<Point2f> const &points)
 {
@@ -187,86 +187,198 @@ Point calculateCom(Mat_<uchar> orig)
     return { total.x / count, total.y / count };
 }
 
-int main()
+template <typename T>
+bool isEmptyPoint(T point, int imageType)
 {
-    int noPoints, dimensions;
-    double aux;
-    Mat_<double> points;
-    Mat_<double> covariance;
-    Mat_<double> lambda;
-    Mat_<double> q;
-    Mat_<double> coefficients;
-    Mat_<double> pca;
-    Mat_<uchar> img;
-    double minX, maxX, minY, maxY, minZ, maxZ;
-    std::vector <double> meanVector;
-    int finalDimensions[] = { 2, 3 };
-
-    for (int noTest = 0; noTest < TOTAL_TESTS; ++noTest)
+    if (!imageType)
+        return point == 255;
+    
+    if (imageType == 1)
     {
-        std::ifstream fi(INPUT_PREFIX + LAB_FOLDER + INPUT_FILES[noTest]);
-        meanVector.clear();
-        minX = minY = minZ = FLT_MAX;
-        maxX = maxY = maxZ = FLT_MIN;
+        Vec3b s = Vec3b(point);
+        return s[0] == 255 && s[1] == 255 && s[2] == 255;
+    }
+    
+    return true;
+}
 
-        fi >> noPoints >> dimensions;
-        points = Mat_<double>(noPoints, dimensions);
+// imageType - 0 for grayscale image; 1 for 3 channel image
+template <typename T>
+Mat_<int> prepareData(Mat_<T> const& source, int d, int imageType)
+{
+    Mat_<int> res;
+    std::vector<Point> points;
+    Point aux;
+    T matVal;
 
-        for (int i = 0; i < dimensions; ++i)
-            meanVector.push_back(0);
+    if (!imageType && d == 3)
+        throw std::invalid_argument("Cannot extract 3 dimensions from grayscale image");
 
-        for (int i = 0; i < noPoints; ++i)
-            for (int j = 0; j < dimensions; ++j)
-            {
-                fi >> points(i, j);
-                meanVector.at(j) += points(i, j);
-            }
+    for (int i = 0; i < source.rows; ++i)
+        for (int j = 0; j < source.cols; ++j)
+            if (!isEmptyPoint<T>(source(i, j), imageType))
+                points.push_back({j, i});
 
-        // Calculate the mean vector
-        for (int i = 0; i < dimensions; ++i)
-            meanVector.at(i) /= noPoints;
+    res = Mat_<int>(points.size(), d, 0);
 
-        // Subtract the mean vector
-        for (int i = 0; i < noPoints; ++i)
-            for (int j = 0; j < dimensions; ++j)
-                points(i, j) -= meanVector.at(j);
+    for (int i = 0; i < points.size(); ++i)
+    {
+        aux = points.at(i);
+        matVal = source(aux.y, aux.x);
 
-        // Calculate the covariance
-        covariance = points.t() * points / ((double)noPoints - 1);
-
-        // Perform eigenvalue decomposition
-        eigen(covariance, lambda, q);
-        q = q.t();
-
-        //coefficients = q(Rect(0, 0, dimensions, finalDimensions[noTest])).t();
-        coefficients = points * q;
-        //pca = points * coefficients;
-        pca = coefficients * q.t();
-
-        for (int i = 0; i < coefficients.rows; ++i)
+        if (imageType && d == 1)
         {
-            minX = min(minX, coefficients(i, 0));
-            minY = min(minY, coefficients(i, 1));
-            minZ = min(minZ, coefficients(i, 2));
-            maxX = max(maxX, coefficients(i, 0));
-            maxY = max(maxY, coefficients(i, 1));
-            maxZ = max(maxZ, coefficients(i, 2));
+            Vec3b s = matVal;
+            res(i, 0) = 1.0f * (s[0] + s[1] + s[2]) / 3.0f;
+            continue;
+        }
+        else if (d == 3)
+        {
+            Vec3b s = matVal;
+            res(i, 0) = s[0], res(i, 1) = s[1], res(i, 2) = s[2];
         }
 
-        img = Mat_<uchar>(maxX - minX + 1, maxY - minY + 1);
-        img.setTo(255);
+        switch (d)
+        {
+        case 1:
+            res(i, 0) = matVal;
+            break;
+        case 2:
+            res(i, 0) = aux.x, res(i, 1) = aux.y;
+            break;
+        default:
+            break;
+        }
+    }
 
-        std::cout << minX << ' ' << maxX << ' ' << minY << ' ' << maxY << '\n';
+    return res;
+}
 
-        for (int i = 0; i < coefficients.rows; ++i)
-            if (!noTest)
-                img(coefficients(i, 0) - minX, coefficients(i, 1) - minY) = 0;
-            else
-                img(coefficients(i, 0) - minX, coefficients(i, 1) - minY) = 255 - (coefficients(i, 2) - minZ) / (maxZ - minZ) * 255;
+std::pair<std::vector<int>, Mat_<double>> kmeans(Mat_<int> const& x, int k)
+{
+    std::uniform_int_distribution<int> distribution(0, x.rows - 1);
+    std::vector<int> clusterSize(k);
+    Mat_<double> clusterMeans(k, x.cols);
+    Mat_<double> newClusters(k, x.cols);
+    std::vector<int> memberships(x.rows);
+    std::vector<int> oldMemberships(x.rows, -1);
+    bool membershipsChanged = true;
+    double bestDiff, currentDiff;
+    int bestCluster;
+    int idx;
 
-        imshow("Result", img);
+    //std::cout << "Rows " << x.cols << '\n';
+    for (int i = 0; i < clusterMeans.rows; ++i)
+    { 
+        idx = distribution(engine);
+        for (int j = 0; j < x.cols; ++j)
+            clusterMeans(i, j) = x(idx, j);
+    }
+
+    for (int iterationNo = 0; iterationNo < 10 && membershipsChanged; ++iterationNo)
+    {
+        membershipsChanged = false;
+
+        // compute clusters
+        for (int i = 0; i < x.rows; ++i)
+        {
+            bestDiff = INT_MAX;
+            bestCluster = -1;
+            for (int j = 0; j < clusterMeans.rows; ++j)
+            {
+                currentDiff = 0;
+                for (int z = 0; z < x.cols; ++z)
+                    currentDiff += (x(i, z) - clusterMeans(j, z)) * (x(i, z) - clusterMeans(j, z));
+                currentDiff = sqrt(currentDiff);
+                if (currentDiff < bestDiff)
+                {
+                    bestDiff = currentDiff;
+                    bestCluster = j;
+                }
+            }
+            memberships.at(i) = bestCluster;
+        }
+
+        // compute new means
+        std::fill(clusterSize.begin(), clusterSize.end(), 0);
+        newClusters.setTo(0);
+        for (int i = 0; i < x.rows; ++i)
+        {
+            ++clusterSize.at(memberships.at(i));
+            for (int j = 0; j < x.cols; ++j)
+                newClusters(memberships.at(i), j) += x(i, j);
+        }
+        for (int i = 0; i < newClusters.rows; ++i)
+            for (int j = 0; j < newClusters.cols; ++j)
+                newClusters(i, j) /= clusterSize.at(i);
+        newClusters.copyTo(clusterMeans);
+
+        // check for membership changes
+        for (int i = 0; i < memberships.size(); ++i)
+            if (memberships.at(i) != oldMemberships.at(i))
+            {
+                oldMemberships.at(i) = memberships.at(i);
+                membershipsChanged = true;
+            }
+    }
+
+    return { memberships, clusterMeans };
+}
+
+int main()
+{
+    Mat_<uchar> img;
+    Mat_<int> res;
+    std::string fpath;
+    std::vector<Point> points;
+    int d, k;
+    std::vector<int> membership;
+    Mat_<double> clusterMeans;
+    Mat_<Vec3b> result;
+    std::vector<Vec3b> colors;
+
+    for (int testNo = 0; testNo < TOTAL_TESTS; ++testNo)
+    {
+        fpath = INPUT_PREFIX + LAB_FOLDER + INPUT_FILES[0] + std::to_string(testNo + 1) + ".bmp";
+        img = imread(fpath, CV_LOAD_IMAGE_GRAYSCALE);
+        result = Mat_<Vec3b>(img.rows, img.cols);
+        result.setTo(255);
+
+        for (int i = 0; i < img.rows; ++i)
+            for (int j = 0; j < img.cols; ++j)
+                if (!img(i, j))
+                    points.push_back({ j, i });
+
+        std::cout << "Please input the number of dimensions: ";
+        std::cin >> d;
+
+        res = prepareData<uchar>(img, d, 0);
+
+        std::cout << "Please input the number of clusters: ";
+        std::cin >> k;
+
+        colors = std::vector<Vec3b>(k);
+        std::tie(membership, clusterMeans) = kmeans(res, k);
+
+        std::uniform_int_distribution<int> distribution(0, 255);
+        for (int i = 0; i < k; ++i)
+        {
+            colors.at(i) = {
+                (uchar)distribution(engine),
+                (uchar)distribution(engine),
+                (uchar)distribution(engine)
+            };
+        }
+
+        if (d == 2)
+            for (int i = 0; i < res.rows; ++i)
+                circle(result, { res(i, 1), res(i, 0) }, 2, colors.at(membership.at(i)), 3);
+
+        imshow("Result", result);
         waitKey(0);
     }
+
+
 
 	return 0;
 }
