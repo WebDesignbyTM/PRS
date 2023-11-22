@@ -26,8 +26,11 @@ struct LocalPeak
 };
 RNGeng engine(100);
 std::string INPUT_PREFIX = "c:\\Users\\logoeje\\source\\repos\\PRS\\Inputs\\";
-std::string LAB_FOLDER = "lab7\\";
-std::string INPUT_FILES[] = { "points", "pca3d.txt" };
+std::string LAB_FOLDER = "lab8\\";
+std::string SUBFOLDERS[] = { "train\\", "test\\" };
+constexpr int SUBFOLDERS_NO = 2; // 2
+std::string CLASSES[] = { "beach", "city", "desert", "forest", "landscape", "snow" };
+constexpr int CLASSES_NO = 6; // 6
 const int TOTAL_TESTS = 5;
 
 std::pair <float, float> calculateParameters(int noPoints, std::vector<Point2f> const &points)
@@ -325,60 +328,136 @@ std::pair<std::vector<int>, Mat_<double>> kmeans(Mat_<int> const& x, int k)
     return { memberships, clusterMeans };
 }
 
-int main()
+std::vector<int> computeHistogram(Mat_<Vec3b> const& img, int noBins)
 {
-    Mat_<uchar> img;
-    Mat_<int> res;
-    std::string fpath;
-    std::vector<Point> points;
-    int d, k;
-    std::vector<int> membership;
-    Mat_<double> clusterMeans;
-    Mat_<Vec3b> result;
-    std::vector<Vec3b> colors;
+    std::vector<int> histogram(3 * noBins, 0);
+    int bucketSize = 256 / noBins;
 
-    for (int testNo = 0; testNo < TOTAL_TESTS; ++testNo)
-    {
-        fpath = INPUT_PREFIX + LAB_FOLDER + INPUT_FILES[0] + std::to_string(testNo + 1) + ".bmp";
-        img = imread(fpath, CV_LOAD_IMAGE_GRAYSCALE);
-        result = Mat_<Vec3b>(img.rows, img.cols);
-        result.setTo(255);
-
-        for (int i = 0; i < img.rows; ++i)
-            for (int j = 0; j < img.cols; ++j)
-                if (!img(i, j))
-                    points.push_back({ j, i });
-
-        std::cout << "Please input the number of dimensions: ";
-        std::cin >> d;
-
-        res = prepareData<uchar>(img, d, 0);
-
-        std::cout << "Please input the number of clusters: ";
-        std::cin >> k;
-
-        colors = std::vector<Vec3b>(k);
-        std::tie(membership, clusterMeans) = kmeans(res, k);
-
-        std::uniform_int_distribution<int> distribution(0, 255);
-        for (int i = 0; i < k; ++i)
+    for (int i = 0; i < img.rows; ++i)
+        for (int j = 0; j < img.cols; ++j)
         {
-            colors.at(i) = {
-                (uchar)distribution(engine),
-                (uchar)distribution(engine),
-                (uchar)distribution(engine)
-            };
+            // bucketSize = 256 / noBins
+            // a * bucketSize <= x < a bucketSize + bucketSize
+            // a <= x / bucketSize < a + 1
+            ++histogram.at(img(i, j)[2] / bucketSize); // red
+            ++histogram.at(noBins + img(i, j)[1] / bucketSize); // green
+            ++histogram.at(2 * noBins + img(i, j)[0] / bucketSize); // blue
         }
 
-        if (d == 2)
-            for (int i = 0; i < res.rows; ++i)
-                circle(result, { res(i, 1), res(i, 0) }, 2, colors.at(membership.at(i)), 3);
+    return histogram;
+}
 
-        imshow("Result", result);
-        waitKey(0);
+int calculateHistogramDistance(std::vector<int> const& h1, std::vector<int> const& h2)
+{
+    int total = 0;
+
+    if (h1.size() != h2.size())
+        throw std::exception("Mismatched histograms: different sizes");
+
+    for (int i = 0; i < h1.size(); ++i)
+        total += abs(h1.at(i) - h2.at(i));
+
+    return total;
+}
+
+int main()
+{
+    Mat_<Vec3b> img;
+    std::vector<int> hist;
+    std::vector<int> aux;
+    constexpr int histBins = 8;
+    constexpr int totalTrainingSamples = 672;
+    constexpr int k = 5;
+    Mat_<int> X(totalTrainingSamples, 3 * histBins);
+    std::vector<int> y(totalTrainingSamples);
+    std::string fpath;
+    int subfolder;
+    // <distance, class>
+    std::vector<std::pair<int, int>> distances;
+    std::vector<int> votes(6, 0);
+    Mat_<float> confusion(CLASSES_NO, CLASSES_NO);
+    float accuracy = 0;
+    float correct = 0;
+    float total = 0;
+    
+    confusion.setTo(0);
+
+    // train data - only take the train subfolder
+    subfolder = 0;
+    int fileIdx = 0;
+    for (int category = 0; category < CLASSES_NO; ++category)
+    {
+        fpath = INPUT_PREFIX + LAB_FOLDER + SUBFOLDERS[subfolder] + CLASSES[category];
+        for (auto const &entry : fs::directory_iterator(fpath))
+        {
+            img = imread(entry.path().string(), CV_LOAD_IMAGE_COLOR);
+            hist = computeHistogram(img, histBins);
+            for (int j = 0; j < X.cols; ++j)
+                X(fileIdx, j) = hist.at(j);
+            y.at(fileIdx) = category;
+            ++fileIdx;
+        }
     }
 
+    // test data - only take the test subfolder
+    subfolder = 1;
+    for (int category = 0; category < CLASSES_NO; ++category)
+    {
+        fpath = INPUT_PREFIX + LAB_FOLDER + SUBFOLDERS[subfolder] + CLASSES[category];
+        for (auto const& entry : fs::directory_iterator(fpath))
+        {
+            distances.clear();
+            for (int i = 0; i < CLASSES_NO; ++i)
+                votes.at(i) = 0;
+            img = imread(entry.path().string(), CV_LOAD_IMAGE_COLOR);
+            hist = computeHistogram(img, histBins);
 
+            // calculate distances
+            for (int i = 0; i < X.rows; ++i)
+            {
+                X.row(i).copyTo(aux);
+                distances.push_back({ calculateHistogramDistance(hist, aux), y.at(i) });
+            }
+
+            // count votes
+            std::sort(distances.begin(), distances.end());
+            for (int i = 0; i < k; ++i)
+                ++votes.at(distances.at(i).second);
+
+            // find best class
+            int bestClass, bestVotes;
+            bestClass = bestVotes = 0;
+            for (int i = 0; i < CLASSES_NO; ++i)
+            {
+                //std::cout << votes.at(i) << ' ';
+                if (votes.at(i) > bestVotes)
+                {
+                    bestVotes = votes.at(i);
+                    bestClass = i;
+                }
+            }
+
+            //std::cout << CLASSES[bestClass] << '\n';
+            ++confusion(bestClass, category);
+            //imshow("Sample", img);
+            //waitKey(0);
+        }
+    }
+
+    for (int i = 0; i < confusion.rows; ++i)
+    {
+        for (int j = 0; j < confusion.cols; ++j)
+        {
+            std::cout << confusion(i, j) << ' ';
+            if (i == j)
+                correct += confusion(i, j);
+            total += confusion(i, j);
+        }
+        std::cout << '\n';
+    }
+
+    accuracy = correct / total;
+    std::cout << "Accuracy " << accuracy << '\n';
 
 	return 0;
 }
