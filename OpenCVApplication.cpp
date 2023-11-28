@@ -26,11 +26,11 @@ struct LocalPeak
 };
 RNGeng engine(100);
 std::string INPUT_PREFIX = "c:\\Users\\logoeje\\source\\repos\\PRS\\Inputs\\";
-std::string LAB_FOLDER = "lab8\\";
+std::string LAB_FOLDER = "lab9\\";
 std::string SUBFOLDERS[] = { "train\\", "test\\" };
 constexpr int SUBFOLDERS_NO = 2; // 2
-std::string CLASSES[] = { "beach", "city", "desert", "forest", "landscape", "snow" };
-constexpr int CLASSES_NO = 6; // 6
+std::string CLASSES[] = { "0", "1", "2", "3", "4", "5", "6", "7", "8", "9" };
+constexpr int CLASSES_NO = 10; // 10
 const int TOTAL_TESTS = 5;
 
 std::pair <float, float> calculateParameters(int noPoints, std::vector<Point2f> const &points)
@@ -365,124 +365,149 @@ float calculateHistogramDistance(std::vector<float> const& h1, std::vector<float
 
 int main()
 {
-    Mat_<Vec3b> img;
-    Mat_<Vec3b> imgHsv;
-    std::vector<float> hist;
-    std::vector<float> aux;
-    constexpr int histBins = 128;
-    constexpr int totalTrainingSamples = 672;
-    constexpr int k = 11;
-    Mat_<float> X(totalTrainingSamples, 3 * histBins);
-    std::vector<int> y(totalTrainingSamples);
+    Mat_<uchar> img;
+    Mat_<uchar> X;
+    Mat_<float> priors;
+    Mat_<float> likelihoods;
+    Mat_<int> confusion;
     std::string fpath;
     int subfolder;
-    // <distance, class>
-    std::vector<std::pair<float, int>> distances;
-    std::vector<int> votes(6, 0);
-    Mat_<float> confusion(CLASSES_NO, CLASSES_NO);
-    float accuracy = 0;
-    float correct = 0;
-    float total = 0;
+    std::vector<int> y;
+    std::vector<float> posteriors;
+    constexpr int trainingSamples = 60000;
+    constexpr int testSamples = 10000;
+    constexpr int totalFeatures = 28 * 28;
+    constexpr int imageRows = 28;
+    int binThresh = 75;
+    int debug = 0;
     
-    for (int crtBins = 8; crtBins <= 64; crtBins += 8)
+    // initialize all data
+    X = Mat_<uchar>(trainingSamples, totalFeatures, (uchar)0);
+    priors = Mat_<float>(CLASSES_NO, 1, 0.0f);
+    likelihoods = Mat_<float>(CLASSES_NO, totalFeatures, 0.0f);
+    y = std::vector<int>(trainingSamples, 0);
+    posteriors = std::vector<float>(CLASSES_NO, 0);
+    confusion = Mat_<int>(CLASSES_NO, CLASSES_NO, 0);
+    
+    std::cout << "Select threshold ([1-255] suggested: 75): ";
+    std::cin >> binThresh;
+    std::cout << "Print debug messages? (0 or 1): ";
+    std::cin >> debug;
+
+    // train data - only take the train subfolder
+    subfolder = 0;
+    int fileIdx = 0;
+    float currentClassCount = 0;
+    for (int category = 0; category < CLASSES_NO; ++category)
     {
-        for (int crtK = 5; crtK <= 35; crtK += 2)
+        fpath = INPUT_PREFIX + LAB_FOLDER + SUBFOLDERS[subfolder] + CLASSES[category];
+        currentClassCount = 0;
+
+        for (auto const &entry : fs::directory_iterator(fpath))
         {
-            std::cout << crtBins << " bins and " << crtK << " k\n";
+            img = imread(entry.path().string(), CV_LOAD_IMAGE_GRAYSCALE);
 
-            // reset all data
-            confusion.setTo(0);
-            hist.clear();
-            aux.clear();
-            X = Mat_<float>(totalTrainingSamples, 3 * crtBins);
-            X.setTo(0);
-            y.clear();
-            for (int i = 0; i < totalTrainingSamples; ++i)
-                y.push_back(0);
-            accuracy = correct = total = 0;
-
-            // train data - only take the train subfolder
-            subfolder = 0;
-            int fileIdx = 0;
-            for (int category = 0; category < CLASSES_NO; ++category)
-            {
-                fpath = INPUT_PREFIX + LAB_FOLDER + SUBFOLDERS[subfolder] + CLASSES[category];
-                for (auto const &entry : fs::directory_iterator(fpath))
+            for (int i = 0; i < img.rows; ++i)
+                for (int j = 0; j < img.cols; ++j)
                 {
-                    img = imread(entry.path().string(), CV_LOAD_IMAGE_COLOR);
-                    cvtColor(img, imgHsv, CV_RGB2HSV);
-                    hist = computeHistogram(imgHsv, crtBins);
-                    for (int j = 0; j < X.cols; ++j)
-                        X(fileIdx, j) = hist.at(j);
-                    y.at(fileIdx) = category;
-                    ++fileIdx;
+                    X(fileIdx, i * imageRows + j) = (img(i, j) >= binThresh);
+                    likelihoods(category, i * imageRows + j) += (img(i, j) >= binThresh);
                 }
-            }
 
-            // test data - only take the test subfolder
-            subfolder = 1;
-            for (int category = 0; category < CLASSES_NO; ++category)
+            y.at(fileIdx++) = category;
+            ++currentClassCount;
+        }
+
+        priors(category, 0) = currentClassCount / trainingSamples;
+        // calculate likelihoods with laplace smoothing
+        for (int feature = 0; feature < totalFeatures; ++feature)
+            likelihoods(category, feature) = (likelihoods(category, feature) + 1) / (1.0f * currentClassCount + CLASSES_NO);
+
+        std::cout << "Prior for class " + CLASSES[category] + " is " << priors(category, 0) << '\n';
+    }
+
+    if (debug)
+    {
+        for (int digit = 0; digit < CLASSES_NO; ++digit)
+        {
+            std::cout << "Representation of digit " << digit << '\n';
+            for (int i = 0; i < imageRows; ++i)
             {
-                fpath = INPUT_PREFIX + LAB_FOLDER + SUBFOLDERS[subfolder] + CLASSES[category];
-                for (auto const& entry : fs::directory_iterator(fpath))
-                {
-                    distances.clear();
-                    for (int i = 0; i < CLASSES_NO; ++i)
-                        votes.at(i) = 0;
-                    img = imread(entry.path().string(), CV_LOAD_IMAGE_COLOR);
-                    cvtColor(img, imgHsv, CV_RGB2HSV);
-                    hist = computeHistogram(imgHsv, crtBins);
-
-                    // calculate distances
-                    for (int i = 0; i < X.rows; ++i)
-                    {
-                        X.row(i).copyTo(aux);
-                        distances.push_back({ calculateHistogramDistance(hist, aux), y.at(i) });
-                    }
-
-                    // count votes
-                    std::sort(distances.begin(), distances.end());
-                    for (int i = 0; i < crtK; ++i)
-                        ++votes.at(distances.at(i).second);
-
-                    // find best class
-                    int bestClass, bestVotes;
-                    bestClass = bestVotes = 0;
-                    for (int i = 0; i < CLASSES_NO; ++i)
-                    {
-                        //std::cout << votes.at(i) << ' ';
-                        if (votes.at(i) > bestVotes)
-                        {
-                            bestVotes = votes.at(i);
-                            bestClass = i;
-                        }
-                    }
-
-                    //std::cout << CLASSES[bestClass] << '\n';
-                    ++confusion(bestClass, category);
-                    //imshow("Sample", img);
-                    //waitKey(0);
-                }
+                for (int j = 0; j < imageRows; ++j)
+                    if (likelihoods(digit, i * imageRows + j) > 0.5)
+                        std::cout << "*";
+                    else
+                        std::cout << "0";
+                std::cout << '\n';
             }
-
-            for (int i = 0; i < confusion.rows; ++i)
-            {
-                for (int j = 0; j < confusion.cols; ++j)
-                {
-                    //std::cout << confusion(i, j) << ' ';
-                    if (i == j)
-                        correct += confusion(i, j);
-                    total += confusion(i, j);
-                }
-                //std::cout << '\n';
-            }
-
-            accuracy = correct / total;
-            if (accuracy > 0.63)
-                std::cout << "Accuracy " << accuracy << '\n';
-
+            std::cout << "\n-------------------------------------------------\n";
         }
     }
+
+    srand(time(NULL));
+
+    // test data - only take the test subfolder
+    subfolder = 1;
+    float featureSum = 0;
+    for (int className = 0; className < CLASSES_NO; ++className)
+    {
+        fpath = INPUT_PREFIX + LAB_FOLDER + SUBFOLDERS[subfolder] + CLASSES[className];
+        for (auto const& entry : fs::directory_iterator(fpath))
+        {
+            img = imread(entry.path().string(), CV_LOAD_IMAGE_GRAYSCALE);
+
+            // calculate posteriors
+            for (int category = 0; category < CLASSES_NO; ++category)
+            {
+                featureSum = 0;
+                for (int i = 0; i < img.rows; ++i)
+                    for (int j = 0; j < img.cols; ++j)
+                        if (img(i, j) >= binThresh)
+                            featureSum += likelihoods(category, i * imageRows + j);
+                        // Daca numar si pixelii negri, toat cifrele devin 1, pentru ca 1 are de departe cei mai multi pixeli negri
+                        //else
+                        //    featureSum += 1 - likelihoods(category, i * imageRows + j);
+
+                posteriors.at(category) = log(priors(category, 0)) + log(featureSum);
+            }
+            
+            // find best class
+            int bestClass;
+            float bestPosterior;
+            bestClass = bestPosterior = 0;
+            for (int i = 0; i < CLASSES_NO; ++i)
+            {
+                if (posteriors.at(i) > bestPosterior)
+                {
+                    bestPosterior = posteriors.at(i);
+                    bestClass = i;
+                }
+            }
+
+            ++confusion(className, bestClass);
+
+            if (debug && rand() % 1000 < 3)
+            {
+                std::cout << "Poseriors:\n";
+                for (int i = 0; i < CLASSES_NO; ++i)
+                    std::cout << exp(posteriors.at(i)) << ' ';
+                std::cout << "\nVerdict:\n" << CLASSES[bestClass] << "\n\n";
+                imshow("Sample", img);
+                waitKey(0);
+            }
+        }
+    }
+
+    float correct = 0;
+    std::cout << "Confusion matrix:\n";
+    for (int i = 0; i < CLASSES_NO; ++i)
+    {
+        for (int j = 0; j < CLASSES_NO; ++j)
+            std::cout << confusion(i, j) << ' ';
+        std::cout << '\n';
+        correct += confusion(i, i);
+    }
+    std::cout << "Error rate: " << (1 - correct / testSamples) * 100 << "%";
 
 	return 0;
 }
