@@ -389,10 +389,10 @@ int main()
     posteriors = std::vector<float>(CLASSES_NO, 0);
     confusion = Mat_<int>(CLASSES_NO, CLASSES_NO, 0);
     
-    std::cout << "Select threshold ([1-255] suggested: 75): ";
-    std::cin >> binThresh;
-    std::cout << "Print debug messages? (0 or 1): ";
-    std::cin >> debug;
+    //std::cout << "Select threshold ([1-255] suggested: 75): ";
+    //std::cin >> binThresh;
+    //std::cout << "Print debug messages? (0 or 1): ";
+    //std::cin >> debug;
 
     // train data - only take the train subfolder
     subfolder = 0;
@@ -421,7 +421,7 @@ int main()
         priors(category, 0) = currentClassCount / trainingSamples;
         // calculate likelihoods with laplace smoothing
         for (int feature = 0; feature < totalFeatures; ++feature)
-            likelihoods(category, feature) = (likelihoods(category, feature) + 1) / (1.0f * currentClassCount + CLASSES_NO);
+            likelihoods(category, feature) = max(0.00001f, (likelihoods(category, feature) + 1) / (1.0f * currentClassCount + CLASSES_NO));
 
         std::cout << "Prior for class " + CLASSES[category] + " is " << priors(category, 0) << '\n';
     }
@@ -463,18 +463,18 @@ int main()
                 for (int i = 0; i < img.rows; ++i)
                     for (int j = 0; j < img.cols; ++j)
                         if (img(i, j) >= binThresh)
-                            featureSum += likelihoods(category, i * imageRows + j);
-                        // Daca numar si pixelii negri, toat cifrele devin 1, pentru ca 1 are de departe cei mai multi pixeli negri
-                        //else
-                        //    featureSum += 1 - likelihoods(category, i * imageRows + j);
+                            featureSum += log(likelihoods(category, i * imageRows + j));
+                        else
+                            featureSum += log(1 - likelihoods(category, i * imageRows + j));
 
-                posteriors.at(category) = log(priors(category, 0)) + log(featureSum);
+                posteriors.at(category) = log(priors(category, 0)) + featureSum;
             }
             
             // find best class
             int bestClass;
             float bestPosterior;
-            bestClass = bestPosterior = 0;
+            bestClass = 0;
+            bestPosterior = posteriors.at(0);
             for (int i = 0; i < CLASSES_NO; ++i)
             {
                 if (posteriors.at(i) > bestPosterior)
@@ -486,7 +486,7 @@ int main()
 
             ++confusion(className, bestClass);
 
-            if (debug && rand() % 1000 < 3)
+            if (debug && rand() % 10000 < 5)
             {
                 std::cout << "Poseriors:\n";
                 for (int i = 0; i < CLASSES_NO; ++i)
@@ -499,15 +499,19 @@ int main()
     }
 
     float correct = 0;
+    float usedSamples = 0;
     std::cout << "Confusion matrix:\n";
     for (int i = 0; i < CLASSES_NO; ++i)
     {
         for (int j = 0; j < CLASSES_NO; ++j)
+        {
             std::cout << confusion(i, j) << ' ';
+            usedSamples += confusion(i, j);
+        }
         std::cout << '\n';
         correct += confusion(i, i);
     }
-    std::cout << "Error rate: " << (1 - correct / testSamples) * 100 << "%";
+    std::cout << "Error rate: " << (1 - correct / usedSamples) * 100 << "%";
 
 	return 0;
 }
