@@ -26,12 +26,12 @@ struct LocalPeak
 };
 RNGeng engine(100);
 std::string INPUT_PREFIX = "c:\\Users\\logoeje\\source\\repos\\PRS\\Inputs\\";
-std::string LAB_FOLDER = "lab9\\";
+std::string LAB_FOLDER = "lab10\\";
 std::string SUBFOLDERS[] = { "train\\", "test\\" };
 constexpr int SUBFOLDERS_NO = 2; // 2
 std::string CLASSES[] = { "0", "1", "2", "3", "4", "5", "6", "7", "8", "9" };
 constexpr int CLASSES_NO = 10; // 10
-const int TOTAL_TESTS = 5;
+const int TOTAL_TESTS = 7;
 
 std::pair <float, float> calculateParameters(int noPoints, std::vector<Point2f> const &points)
 {
@@ -205,6 +205,11 @@ bool isEmptyPoint(T point, int imageType)
     return true;
 }
 
+bool isEmpty(Vec3b point)
+{
+    return point[0] == point[1] && point[1] == point[2] && point[2] == 255;
+}
+
 // imageType - 0 for grayscale image; 1 for 3 channel image
 template <typename T>
 Mat_<int> prepareData(Mat_<T> const& source, int d, int imageType)
@@ -363,155 +368,173 @@ float calculateHistogramDistance(std::vector<float> const& h1, std::vector<float
     return total;
 }
 
+Mat_<Vec3b> onlinePerception(Mat_<Vec3b> img, Mat_<float> const& X, Mat_<float> const& Y, int maxIter, int noPoints, float eta, float errorLimit)
+{
+    Point dp1, dp2;
+    Mat_<Vec3b> displayImg;
+    std::vector<float> weights({ 1, 1, -1 });
+    float error, z;
+
+    img.copyTo(displayImg);
+    int iterNo;
+
+    for (iterNo = 0; iterNo < maxIter; ++iterNo)
+    {
+        error = 0;
+        for (int i = 0; i < noPoints; ++i)
+        {
+            z = weights.at(0) * X(i, 0) + weights.at(1) * X(i, 1) + weights.at(2) * X(i, 2);
+            if (z * Y(i, 0) > 0)
+                continue;
+
+            // update parameters if wrong
+            for (int j = 0; j < weights.size(); ++j)
+                weights.at(j) += eta * X(i, j) * Y(i, 0);
+            ++error;
+        }
+
+        img.copyTo(displayImg);
+        if (weights.at(1) > 0.001f)
+        {
+            dp1.y = 0;
+            dp1.x = -weights.at(0) / weights.at(1);
+            dp2.y = img.rows - 1;
+            dp2.x = (-weights.at(0) - dp2.y * weights.at(2)) / weights.at(1);
+        }
+        else
+        {
+            dp1.x = 0;
+            dp1.y = -weights.at(0) / weights.at(2);
+            dp2.x = img.cols - 1;
+            dp2.y = (-weights.at(0) - dp2.x * weights.at(1)) / weights.at(2);
+        }
+        line(displayImg, dp1, dp2, { 0, 255, 0 });
+
+        error /= noPoints;
+        if (error < errorLimit)
+            break;
+
+        if (iterNo == maxIter - 1)
+            std::cout << "Ran out of iterations\n";
+    }
+
+    std::cout << iterNo << ' ' << error << '\n';
+    std::cout << "Determined online " << weights.at(0) << ' ' << weights.at(1) << ' ' << weights.at(2) << '\n';
+
+    return displayImg;
+}
+
+Mat_<Vec3b> batchPerception(Mat_<Vec3b> img, Mat_<float> const& X, Mat_<float> const& Y, int maxIter, int noPoints, float eta, float errorLimit)
+{
+    Point dp1, dp2;
+    Mat_<Vec3b> displayImg;
+    std::vector<float> weights({ 1, 1, -1 });
+    std::vector<float> losses;
+    float error, z, loss;
+    img.copyTo(displayImg);
+    int iterNo;
+
+    for (iterNo = 0; iterNo < maxIter; ++iterNo)
+    {
+        error = 0;
+        loss = 0;
+        losses = std::vector<float>({ 0, 0, 0 });
+
+        for (int i = 0; i < noPoints; ++i)
+        {
+            z = weights.at(0) * X(i, 0) + weights.at(1) * X(i, 1) + weights.at(2) * X(i, 2);
+            if (z * Y(i, 0) > 0)
+                continue;
+
+            // update parameters if wrong
+            for (int j = 0; j < losses.size(); ++j)
+                losses.at(j) -= X(i, j) * Y(i, 0);
+            ++error;
+            loss -= Y(i, 0) * z;
+        }
+
+        img.copyTo(displayImg);
+        if (weights.at(1) > 0.001f)
+        {
+            dp1.y = 0;
+            dp1.x = -weights.at(0) / weights.at(1);
+            dp2.y = img.rows - 1;
+            dp2.x = (-weights.at(0) - dp2.y * weights.at(2)) / weights.at(1);
+        }
+        else
+        {
+            dp1.x = 0;
+            dp1.y = -weights.at(0) / weights.at(2);
+            dp2.x = img.cols - 1;
+            dp2.y = (-weights.at(0) - dp2.x * weights.at(1)) / weights.at(2);
+        }
+        line(displayImg, dp1, dp2, { 0, 255, 0 });
+
+        error /= noPoints;
+        loss /= noPoints;
+        for (int i = 0; i < losses.size(); ++i)
+            losses.at(i) /= noPoints;
+        if (error < errorLimit)
+            break;
+        for (int i = 0; i < losses.size(); ++i)
+            weights.at(i) -= ((!i) ? eta * 100 : eta) * losses.at(i);
+    }
+
+    std::cout << iterNo << ' ' << error << '\n';
+    std::cout << "Determined batch " << weights.at(0) << ' ' << weights.at(1) << ' ' << weights.at(2) << '\n';
+
+    return displayImg;
+}
+
 int main()
 {
-    Mat_<uchar> img;
-    Mat_<uchar> X;
-    Mat_<float> priors;
-    Mat_<float> likelihoods;
-    Mat_<int> confusion;
+    Mat_<Vec3b> img;
+    Mat_<Vec3b> displayImg1;
+    Mat_<Vec3b> displayImg2;
+    Mat_<float> X;
+    Mat_<float> Y;
+    std::vector<Point> points;
+    std::vector<float> weights({1, 1, -1});
+    int noPoints;
+    Point dp1, dp2;
+    constexpr float errorLimit = 0.00001f;
+    constexpr float eta = 0.01f;
+    constexpr int maxIter = 100000;
+    float error;
     std::string fpath;
-    int subfolder;
-    std::vector<int> y;
-    std::vector<float> posteriors;
-    constexpr int trainingSamples = 60000;
-    constexpr int testSamples = 10000;
-    constexpr int totalFeatures = 28 * 28;
-    constexpr int imageRows = 28;
-    int binThresh = 75;
-    int debug = 0;
     
-    // initialize all data
-    X = Mat_<uchar>(trainingSamples, totalFeatures, (uchar)0);
-    priors = Mat_<float>(CLASSES_NO, 1, 0.0f);
-    likelihoods = Mat_<float>(CLASSES_NO, totalFeatures, 0.0f);
-    y = std::vector<int>(trainingSamples, 0);
-    posteriors = std::vector<float>(CLASSES_NO, 0);
-    confusion = Mat_<int>(CLASSES_NO, CLASSES_NO, 0);
-    
-    //std::cout << "Select threshold ([1-255] suggested: 75): ";
-    //std::cin >> binThresh;
-    //std::cout << "Print debug messages? (0 or 1): ";
-    //std::cin >> debug;
-
-    // train data - only take the train subfolder
-    subfolder = 0;
-    int fileIdx = 0;
-    float currentClassCount = 0;
-    for (int category = 0; category < CLASSES_NO; ++category)
+    for (int testNo = 0; testNo < TOTAL_TESTS; ++testNo)
     {
-        fpath = INPUT_PREFIX + LAB_FOLDER + SUBFOLDERS[subfolder] + CLASSES[category];
-        currentClassCount = 0;
+        points.clear();
+        fpath = INPUT_PREFIX + LAB_FOLDER + "test0" + std::to_string(testNo) +".bmp";
+        img = imread(fpath, CV_LOAD_IMAGE_COLOR);
 
-        for (auto const &entry : fs::directory_iterator(fpath))
+        for (int i = 0; i < img.rows; ++i)
+            for (int j = 0; j < img.cols; ++j)
+                if (!isEmpty(img(i, j)))
+                    points.push_back({j, i});
+
+        noPoints = points.size();
+        X = Mat_<float>(noPoints, 3);
+        Y = Mat_<int>(noPoints, 1);
+
+        for (int i = 0; i < noPoints; ++i)
         {
-            img = imread(entry.path().string(), CV_LOAD_IMAGE_GRAYSCALE);
-
-            for (int i = 0; i < img.rows; ++i)
-                for (int j = 0; j < img.cols; ++j)
-                {
-                    X(fileIdx, i * imageRows + j) = (img(i, j) >= binThresh);
-                    likelihoods(category, i * imageRows + j) += (img(i, j) >= binThresh);
-                }
-
-            y.at(fileIdx++) = category;
-            ++currentClassCount;
+            Point p = points.at(i);
+            X(i, 0) = 1;
+            X(i, 1) = p.x;
+            X(i, 2) = p.y;
+            // blue point if B > R
+            Y(i, 0) = (img(p.y, p.x)[0] > img(p.y, p.x)[2]) ? -1 : 1;
         }
 
-        priors(category, 0) = currentClassCount / trainingSamples;
-        // calculate likelihoods with laplace smoothing
-        for (int feature = 0; feature < totalFeatures; ++feature)
-            likelihoods(category, feature) = max(0.00001f, (likelihoods(category, feature) + 1) / (1.0f * currentClassCount + CLASSES_NO));
+        resize(onlinePerception(img, X, Y, maxIter, noPoints, eta, errorLimit), displayImg1, Size(), 2, 2);
+        resize(batchPerception(img, X, Y, maxIter, noPoints, eta, errorLimit), displayImg2, Size(), 2, 2);
 
-        std::cout << "Prior for class " + CLASSES[category] + " is " << priors(category, 0) << '\n';
+        imshow("Online perception", displayImg1);
+        imshow("Batch perception", displayImg2);
+        waitKey(0);
     }
-
-    if (debug)
-    {
-        for (int digit = 0; digit < CLASSES_NO; ++digit)
-        {
-            std::cout << "Representation of digit " << digit << '\n';
-            for (int i = 0; i < imageRows; ++i)
-            {
-                for (int j = 0; j < imageRows; ++j)
-                    if (likelihoods(digit, i * imageRows + j) > 0.5)
-                        std::cout << "*";
-                    else
-                        std::cout << "0";
-                std::cout << '\n';
-            }
-            std::cout << "\n-------------------------------------------------\n";
-        }
-    }
-
-    srand(time(NULL));
-
-    // test data - only take the test subfolder
-    subfolder = 1;
-    float featureSum = 0;
-    for (int className = 0; className < CLASSES_NO; ++className)
-    {
-        fpath = INPUT_PREFIX + LAB_FOLDER + SUBFOLDERS[subfolder] + CLASSES[className];
-        for (auto const& entry : fs::directory_iterator(fpath))
-        {
-            img = imread(entry.path().string(), CV_LOAD_IMAGE_GRAYSCALE);
-
-            // calculate posteriors
-            for (int category = 0; category < CLASSES_NO; ++category)
-            {
-                featureSum = 0;
-                for (int i = 0; i < img.rows; ++i)
-                    for (int j = 0; j < img.cols; ++j)
-                        if (img(i, j) >= binThresh)
-                            featureSum += log(likelihoods(category, i * imageRows + j));
-                        else
-                            featureSum += log(1 - likelihoods(category, i * imageRows + j));
-
-                posteriors.at(category) = log(priors(category, 0)) + featureSum;
-            }
-            
-            // find best class
-            int bestClass;
-            float bestPosterior;
-            bestClass = 0;
-            bestPosterior = posteriors.at(0);
-            for (int i = 0; i < CLASSES_NO; ++i)
-            {
-                if (posteriors.at(i) > bestPosterior)
-                {
-                    bestPosterior = posteriors.at(i);
-                    bestClass = i;
-                }
-            }
-
-            ++confusion(className, bestClass);
-
-            if (debug && rand() % 10000 < 5)
-            {
-                std::cout << "Poseriors:\n";
-                for (int i = 0; i < CLASSES_NO; ++i)
-                    std::cout << exp(posteriors.at(i)) << ' ';
-                std::cout << "\nVerdict:\n" << CLASSES[bestClass] << "\n\n";
-                imshow("Sample", img);
-                waitKey(0);
-            }
-        }
-    }
-
-    float correct = 0;
-    float usedSamples = 0;
-    std::cout << "Confusion matrix:\n";
-    for (int i = 0; i < CLASSES_NO; ++i)
-    {
-        for (int j = 0; j < CLASSES_NO; ++j)
-        {
-            std::cout << confusion(i, j) << ' ';
-            usedSamples += confusion(i, j);
-        }
-        std::cout << '\n';
-        correct += confusion(i, i);
-    }
-    std::cout << "Error rate: " << (1 - correct / usedSamples) * 100 << "%";
 
 	return 0;
 }
