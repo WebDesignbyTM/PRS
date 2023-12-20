@@ -26,12 +26,12 @@ struct LocalPeak
 };
 RNGeng engine(100);
 std::string INPUT_PREFIX = "c:\\Users\\logoeje\\source\\repos\\PRS\\Inputs\\";
-std::string LAB_FOLDER = "lab10\\";
+std::string LAB_FOLDER = "lab11\\";
 std::string SUBFOLDERS[] = { "train\\", "test\\" };
 constexpr int SUBFOLDERS_NO = 2; // 2
 std::string CLASSES[] = { "0", "1", "2", "3", "4", "5", "6", "7", "8", "9" };
 constexpr int CLASSES_NO = 10; // 10
-const int TOTAL_TESTS = 7;
+const int TOTAL_TESTS = 6;
 
 std::pair <float, float> calculateParameters(int noPoints, std::vector<Point2f> const &points)
 {
@@ -486,27 +486,77 @@ Mat_<Vec3b> batchPerception(Mat_<Vec3b> img, Mat_<float> const& X, Mat_<float> c
     return displayImg;
 }
 
+struct WeakLearner
+{
+    int featureIdx;
+    int threshold;
+    int classLabel;
+    float error;
+    int classify(Mat_<int> X)
+    {
+        return (X.at<int>(featureIdx) < threshold) ? classLabel : -classLabel;
+    }
+};
+
+WeakLearner findWeakLearner(Mat_<Vec3b> img, Mat_<int> X, std::vector<int> Y, std::vector<float> weights)
+{
+    WeakLearner bestH;
+    float bestErr = LONG_MAX;
+    float err;
+    int featureLimit;
+    int z;
+    
+    // select the inspected feature
+    for (int featureIdx = 0; featureIdx < X.cols; ++featureIdx)
+    {
+        // select the threshold
+        featureLimit = featureIdx ? img.rows : img.cols;
+        for (int threshold = 0; threshold < featureLimit; ++threshold)
+        {
+            // select the class of interest
+            for (int classLabel = -1; classLabel <= 1; classLabel += 2)
+            {
+                err = 0;
+                // iterate through the points
+                for (int i = 0; i < X.rows; ++i)
+                {
+                    z = (X(i, featureIdx) < threshold) ? classLabel : -classLabel;
+                    if (z * Y.at(i) < 0)
+                        err += weights.at(i);
+                }
+                if (err < bestErr)
+                {
+                    bestErr = err;
+                    bestH = { featureIdx, threshold, classLabel, err };
+                }
+            }
+        }
+    }
+
+    return bestH;
+}
+
 int main()
 {
     Mat_<Vec3b> img;
-    Mat_<Vec3b> displayImg1;
-    Mat_<Vec3b> displayImg2;
-    Mat_<float> X;
-    Mat_<float> Y;
+    Mat_<Vec3b> displayImg;
+    Mat_<int> X;
+    std::vector<int> Y;
     std::vector<Point> points;
-    std::vector<float> weights({1, 1, -1});
+    std::vector<float> weights;
+    std::vector<WeakLearner> setLearners;
+    std::vector<float> alphas;
+    WeakLearner crtLearner;
     int noPoints;
-    Point dp1, dp2;
-    constexpr float errorLimit = 0.00001f;
-    constexpr float eta = 0.01f;
-    constexpr int maxIter = 100000;
-    float error;
+    constexpr int maxLearners = 20;
     std::string fpath;
     
     for (int testNo = 0; testNo < TOTAL_TESTS; ++testNo)
     {
         points.clear();
-        fpath = INPUT_PREFIX + LAB_FOLDER + "test0" + std::to_string(testNo) +".bmp";
+        setLearners.clear();
+        alphas.clear();
+        fpath = INPUT_PREFIX + LAB_FOLDER + "points" + std::to_string(testNo) +".bmp";
         img = imread(fpath, CV_LOAD_IMAGE_COLOR);
 
         for (int i = 0; i < img.rows; ++i)
@@ -515,24 +565,62 @@ int main()
                     points.push_back({j, i});
 
         noPoints = points.size();
-        X = Mat_<float>(noPoints, 3);
-        Y = Mat_<int>(noPoints, 1);
+        X = Mat_<int>(noPoints, 2);
+        Y = std::vector<int>();
+        weights = std::vector<float>(noPoints, 1.0f / noPoints);
 
         for (int i = 0; i < noPoints; ++i)
         {
             Point p = points.at(i);
-            X(i, 0) = 1;
+            X(i, 0) = p.y;
             X(i, 1) = p.x;
-            X(i, 2) = p.y;
             // blue point if B > R
-            Y(i, 0) = (img(p.y, p.x)[0] > img(p.y, p.x)[2]) ? -1 : 1;
+            Y.push_back((img(p.y, p.x)[0] > img(p.y, p.x)[2]) ? -1 : 1);
         }
 
-        resize(onlinePerception(img, X, Y, maxIter, noPoints, eta, errorLimit), displayImg1, Size(), 2, 2);
-        resize(batchPerception(img, X, Y, maxIter, noPoints, eta, errorLimit), displayImg2, Size(), 2, 2);
+        for (int learnerIdx = 0; learnerIdx < maxLearners; ++learnerIdx)
+        {
+            crtLearner = findWeakLearner(img, X, Y, weights);
+            float alpha = 0.5f * log((1 - crtLearner.error) / crtLearner.error);
+            float s = 0;
+            for (int i = 0; i < noPoints; ++i)
+            {
+                weights.at(i) = weights.at(i) * exp(-alpha * Y.at(i) * crtLearner.classify(X.row(i)));
+                s += weights.at(i);
+            }
 
-        imshow("Online perception", displayImg1);
-        imshow("Batch perception", displayImg2);
+            for (int i = 0; i < noPoints; ++i)
+                weights.at(i) /= s;
+
+            alphas.push_back(alpha);
+            setLearners.push_back(crtLearner);
+        }
+
+        img.copyTo(displayImg);
+        for (int i = 0; i < img.rows; ++i)
+            for (int j = 0; j < img.cols; ++j)
+                if (isEmpty(displayImg(i, j)))
+                {
+                    float s = 0;
+                    Mat_<int> aux(1, 2);
+                    aux(0, 0) = i;
+                    aux(0, 1) = j;
+                    for (int k = 0; k < maxLearners; ++k)
+                    {
+                        //std::cout << aux.row(0) << '\n';
+                        s += alphas.at(k) * setLearners.at(k).classify(aux.row(0));
+                    }
+                    if (s < 0)
+                        displayImg(i, j) = { 150, 0, 0 };
+                    else
+                        displayImg(i, j) = { 0, 0, 150 };
+                }
+
+        for (auto a : alphas)
+            std::cout << a << ' ';
+        std::cout << '\n';
+
+        imshow("Result", displayImg); 
         waitKey(0);
     }
 
