@@ -25,13 +25,7 @@ struct LocalPeak
     }
 };
 RNGeng engine(100);
-std::string INPUT_PREFIX = "c:\\Users\\logoeje\\source\\repos\\PRS\\Inputs\\";
-std::string LAB_FOLDER = "lab11\\";
-std::string SUBFOLDERS[] = { "train\\", "test\\" };
-constexpr int SUBFOLDERS_NO = 2; // 2
-std::string CLASSES[] = { "0", "1", "2", "3", "4", "5", "6", "7", "8", "9" };
-constexpr int CLASSES_NO = 10; // 10
-const int TOTAL_TESTS = 6;
+std::string INPUT_CSV = "C:\\Users\\logoeje\\source\\repos\\PRS\\project_input\\spotify_songs.csv";
 
 std::pair <float, float> calculateParameters(int noPoints, std::vector<Point2f> const &points)
 {
@@ -536,92 +530,113 @@ WeakLearner findWeakLearner(Mat_<Vec3b> img, Mat_<int> X, std::vector<int> Y, st
     return bestH;
 }
 
+struct Track
+{
+    std::string track_id = "";
+    std::string track_name = "";
+    std::string track_artist = "";
+    double track_popularity = 0;
+    std::string track_album_id = "";
+    std::string track_album_name = "";
+    std::string track_album_release_date = "";
+    std::string playlist_name = "";
+    std::string playlist_id = "";
+    std::string playlist_genre = "";
+    std::string playlist_subgenre = "";
+    double danceability = 0;
+    double energy = 0;
+    double key = 0;
+    double loudness = 0;
+    double mode = 0;
+    double speechiness = 0;
+    double acousticness = 0;
+    double instrumentalness = 0;
+    double liveness = 0;
+    double valence = 0;
+    double tempo = 0;
+    double duration_ms = 0;
+
+    void extract_from_stream(std::string line)
+    {
+        using namespace std;
+        istringstream iss(line);
+        string temp;
+        getline(iss, temp, ',');
+        track_id = temp;
+        getline(iss, temp, ',');
+        track_name = temp;
+        getline(iss, temp, ',');
+        track_artist = temp;
+        getline(iss, temp, ',');
+        istringstream tiss(temp);
+        tiss >> track_popularity;
+        getline(iss, temp, ',');
+        track_album_id = temp;
+        getline(iss, temp, ',');
+        track_album_name = temp;
+        getline(iss, temp, ',');
+        track_album_release_date = temp;
+        getline(iss, temp, ',');
+        playlist_name = temp;
+        getline(iss, temp, ',');
+        playlist_id = temp;
+        getline(iss, temp, ',');
+        playlist_genre = temp;
+        getline(iss, temp, ',');
+        playlist_subgenre = temp;
+        getline(iss, temp, ',');
+        tiss = istringstream(temp);
+        tiss >> danceability;
+        getline(iss, temp, ',');
+        tiss = istringstream(temp);
+        tiss >> energy;
+        getline(iss, temp, ',');
+        tiss = istringstream(temp);
+        tiss >> key;
+        getline(iss, temp, ',');
+        tiss = istringstream(temp);
+        tiss >> loudness;
+        getline(iss, temp, ',');
+        tiss = istringstream(temp);
+        tiss >> mode;
+        getline(iss, temp, ',');
+        tiss = istringstream(temp);
+        tiss >> speechiness;
+        getline(iss, temp, ',');
+        tiss = istringstream(temp);
+        tiss >> acousticness;
+        getline(iss, temp, ',');
+        tiss = istringstream(temp);
+        tiss >> instrumentalness;
+        getline(iss, temp, ',');
+        tiss = istringstream(temp);
+        tiss >> liveness;
+        getline(iss, temp, ',');
+        tiss = istringstream(temp);
+        tiss >> valence;
+        getline(iss, temp, ',');
+        tiss = istringstream(temp);
+        tiss >> tempo;
+        iss >> duration_ms;
+    }
+};
+
 int main()
 {
-    Mat_<Vec3b> img;
-    Mat_<Vec3b> displayImg;
-    Mat_<int> X;
-    std::vector<int> Y;
-    std::vector<Point> points;
-    std::vector<float> weights;
-    std::vector<WeakLearner> setLearners;
-    std::vector<float> alphas;
-    WeakLearner crtLearner;
-    int noPoints;
-    constexpr int maxLearners = 20;
-    std::string fpath;
-    
-    for (int testNo = 0; testNo < TOTAL_TESTS; ++testNo)
+    using namespace std;
+    vector<Track> tracks; // X
+    Track aux;
+    ifstream fi(INPUT_CSV);
+    char delimiter = ',';
+    string line, temp;
+
+    // Get the field names
+    getline(fi, line);
+    while (getline(fi, line))
     {
-        points.clear();
-        setLearners.clear();
-        alphas.clear();
-        fpath = INPUT_PREFIX + LAB_FOLDER + "points" + std::to_string(testNo) +".bmp";
-        img = imread(fpath, CV_LOAD_IMAGE_COLOR);
-
-        for (int i = 0; i < img.rows; ++i)
-            for (int j = 0; j < img.cols; ++j)
-                if (!isEmpty(img(i, j)))
-                    points.push_back({j, i});
-
-        noPoints = points.size();
-        X = Mat_<int>(noPoints, 2);
-        Y = std::vector<int>();
-        weights = std::vector<float>(noPoints, 1.0f / noPoints);
-
-        for (int i = 0; i < noPoints; ++i)
-        {
-            Point p = points.at(i);
-            X(i, 0) = p.y;
-            X(i, 1) = p.x;
-            // blue point if B > R
-            Y.push_back((img(p.y, p.x)[0] > img(p.y, p.x)[2]) ? -1 : 1);
-        }
-
-        for (int learnerIdx = 0; learnerIdx < maxLearners; ++learnerIdx)
-        {
-            crtLearner = findWeakLearner(img, X, Y, weights);
-            float alpha = 0.5f * log((1 - crtLearner.error) / crtLearner.error);
-            float s = 0;
-            for (int i = 0; i < noPoints; ++i)
-            {
-                weights.at(i) = weights.at(i) * exp(-alpha * Y.at(i) * crtLearner.classify(X.row(i)));
-                s += weights.at(i);
-            }
-
-            for (int i = 0; i < noPoints; ++i)
-                weights.at(i) /= s;
-
-            alphas.push_back(alpha);
-            setLearners.push_back(crtLearner);
-        }
-
-        img.copyTo(displayImg);
-        for (int i = 0; i < img.rows; ++i)
-            for (int j = 0; j < img.cols; ++j)
-                if (isEmpty(displayImg(i, j)))
-                {
-                    float s = 0;
-                    Mat_<int> aux(1, 2);
-                    aux(0, 0) = i;
-                    aux(0, 1) = j;
-                    for (int k = 0; k < maxLearners; ++k)
-                    {
-                        //std::cout << aux.row(0) << '\n';
-                        s += alphas.at(k) * setLearners.at(k).classify(aux.row(0));
-                    }
-                    if (s < 0)
-                        displayImg(i, j) = { 150, 0, 0 };
-                    else
-                        displayImg(i, j) = { 0, 0, 150 };
-                }
-
-        for (auto a : alphas)
-            std::cout << a << ' ';
-        std::cout << '\n';
-
-        imshow("Result", displayImg); 
-        waitKey(0);
+        aux.extract_from_stream(line);
+        tracks.push_back(aux);
+        std::cout << aux.track_name << ' ' << aux.duration_ms << '\n';
     }
 
 	return 0;
