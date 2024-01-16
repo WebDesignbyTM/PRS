@@ -507,14 +507,18 @@ WeakLearner findWeakLearner(Mat_<Vec3b> img, Mat_<int> X, std::vector<int> Y, st
     for (int featureIdx = 0; featureIdx < X.cols; ++featureIdx)
     {
         // select the threshold
+        // TODO: change to select a threshold in the relevant interval 
+        // i.e.: go over [-1.4324, 0.78234] in increments of 0.0005
         featureLimit = featureIdx ? img.rows : img.cols;
         for (int threshold = 0; threshold < featureLimit; ++threshold)
         {
             // select the class of interest
+            // TODO: change to match the possible labels
+            // i.e.: from 1 to 6, for each genre
             for (int classLabel = -1; classLabel <= 1; classLabel += 2)
             {
                 err = 0;
-                // iterate through the points
+                // iterate through the tracks
                 for (int i = 0; i < X.rows; ++i)
                 {
                     z = (X(i, featureIdx) < threshold) ? classLabel : -classLabel;
@@ -627,14 +631,20 @@ struct Track
 int main()
 {
     using namespace std;
-    vector<Track> initial_tracks; // X
-    vector<Track> tracks; // X
-    set<string> malformed_genres;
-    map<string, int> genre_popularity;
-    Track aux;
+
+    // DATA PROCESSING
     ifstream fi(INPUT_CSV);
     char delimiter = ',';
     string line, temp;
+    vector<Track> initial_tracks;
+    map<string, int> genre_popularity;
+    set<string> malformed_genres;
+    vector<Track> tracks;
+    Track aux;
+
+    // CLASSIFIER COMPUTATION
+    Mat_<float> X;
+    Mat_<int> Y;
 
     // Get the field names
     getline(fi, line);
@@ -674,5 +684,17 @@ int main()
     cout << "Genre popularities:\n";
     for (auto const& key : genre_popularity)
         cout << key.first << ": " << key.second << " songs" << '\n';
+
+    // TODO
+    // Create generic functions for training weak learners for a genre
+    // i.e.: deduce from the numeric fields of each track how likely it is to be rap
+    // 
+    // Split up each genre track set into training and test samples
+    // 
+    // Perform training for each genre separately
+    // 
+    // Clump together all test data, and run each track through all classifiers 
+    // 
+    // Assume for each track that its highest probability genre is the correct one and draw conclusions
 	return 0;
 }
