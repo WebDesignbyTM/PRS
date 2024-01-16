@@ -12,6 +12,9 @@
 #include <tuple>
 #include <vector>
 #include <limits>
+#include <map>
+#include <set>
+
 namespace fs = std::filesystem;
 
 typedef std::tuple <float, float, float> LineEq;
@@ -624,7 +627,10 @@ struct Track
 int main()
 {
     using namespace std;
+    vector<Track> initial_tracks; // X
     vector<Track> tracks; // X
+    set<string> malformed_genres;
+    map<string, int> genre_popularity;
     Track aux;
     ifstream fi(INPUT_CSV);
     char delimiter = ',';
@@ -635,9 +641,38 @@ int main()
     while (getline(fi, line))
     {
         aux.extract_from_stream(line);
-        tracks.push_back(aux);
-        std::cout << aux.track_name << ' ' << aux.duration_ms << '\n';
+        initial_tracks.push_back(aux);
+        //std::cout << aux.track_name << ' ' << aux.duration_ms << '\n';
     }
 
+    // Explore the labels
+    for (auto const& track : initial_tracks)
+    {
+        if (!genre_popularity.count(track.playlist_genre))
+        {
+            genre_popularity[track.playlist_genre] = 0;
+        }
+        ++genre_popularity[track.playlist_genre];
+    }
+
+    // Remove all genres with less than 100 tracks
+    // This aims to remove low popularity genres that would negatively impact
+    // the classifier, along with misread lines due to extra commas in the initial CSV
+    for (auto const& key : genre_popularity)
+        if (key.second < 200)
+            malformed_genres.insert(key.first);
+
+    for (auto const& genre : malformed_genres)
+        genre_popularity.erase(genre);
+
+    for (auto track : initial_tracks)
+        if (!malformed_genres.count(track.playlist_genre))
+            tracks.push_back(track);
+
+    cout << "Reduced " << initial_tracks.size() << " to " << tracks.size() << " songs.\n";
+
+    cout << "Genre popularities:\n";
+    for (auto const& key : genre_popularity)
+        cout << key.first << ": " << key.second << " songs" << '\n';
 	return 0;
 }
