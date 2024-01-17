@@ -46,6 +46,16 @@ struct ClassDescription
     int samples;
 };
 
+struct LabelVote
+{
+    float confidence;
+    int label;
+    bool operator<(LabelVote const& other) const 
+    {
+        return confidence > other.confidence;
+    }
+};
+
 std::vector<WeakLearner> findWeakLearners(Mat_<int> X, std::vector<int> Y, std::vector<float> weights, std::vector<FeatureDescription> feature_descriptions, int total_tracks)
 {
     std::vector<WeakLearner> bestLearners;
@@ -94,6 +104,18 @@ std::vector<WeakLearner> findWeakLearners(Mat_<int> X, std::vector<int> Y, std::
         bestLearners.push_back(bestH);
     }
     return bestLearners;
+}
+
+int compute_prediction(Mat_<float> X, std::vector<WeakLearner> learners)
+{
+    std::vector<LabelVote> votes;
+    for (auto learner : learners)
+    {
+        int pred = learner.classify(X);
+        votes.push_back({pred * (1 - learner.error), learner.classLabel});
+    }
+    std::sort(votes.begin(), votes.end());
+    return votes.at(0).label;
 }
 
 struct Track
@@ -201,11 +223,14 @@ int main()
     vector<Track> tracks;
     Track aux;
 
-    // CLASSIFIER COMPUTATION
+    // CLASSIFIER CONSTANTS
     constexpr int RELEVANT_FEATURES = 11;
+    constexpr int MAX_LEARNERS = 10;
     vector<string> relevant_feature_names = { 
         "track_popularity", "danceability", "energy", "loudness", "speechiness", "acousticness", 
         "instrumentalness", "liveness", "valence", "tempo", "duration_ms" };
+
+    // CLASSIFIER COMPUTATION
     int train_samples = 0;
     Mat_<float> X = Mat_<float>(MAX_TRACKS, RELEVANT_FEATURES);
     vector<int> Y(MAX_TRACKS, 0);
@@ -215,8 +240,10 @@ int main()
     vector<ClassDescription> class_descriptions;
     map<string, int> genre_mapping;
     vector<FeatureDescription> feature_descriptions;
+    vector<vector<WeakLearner>> selected_learners;
+    vector<float> alphas;
 
-    // Get the field names
+    // Get the fields
     getline(fi, line);
     while (getline(fi, line))
     {
@@ -312,7 +339,7 @@ int main()
 
     // Since features differ in meaning and magnitute, each increment is different
     // The objective is to make each increment ~1% of the interval, in order to 
-    // limit the training and testing time (1% needed over 3 minutes)
+    // limit the training and testing time
     for (auto& description : feature_descriptions)
         description.increment = (description.max - description.min) / 100.0f;
 
@@ -328,17 +355,52 @@ int main()
     cout << '\n';
 
     // Train the model
-    weights = vector<float>(train_samples, 1.0f / train_samples);
-    vector<WeakLearner> weak_learners = findWeakLearners(X, Y, weights, feature_descriptions, train_samples);
 
-    cout << "Selected learners:\n";
-    for (auto learner : weak_learners)
+    weights = vector<float>(train_samples, 1.0f / (1.0f * train_samples));
+    for (int learnerIdx = 0; learnerIdx < MAX_LEARNERS; ++learnerIdx)
     {
-        cout << "Target: " << learner.classLabel << '\n';
-        cout << "Feature: " << learner.featureIdx << '\n';
-        cout << "Threshold: " << learner.threshold << '\n';
-        cout << "Error: " << learner.error << "\n\n";
+        vector<WeakLearner> weak_learners = findWeakLearners(X, Y, weights, feature_descriptions, train_samples);
+        float alpha;
+        float err = 0;
+        int predicted_class;
+
+        cout << "Selected learners:\n";
+        for (auto learner : weak_learners)
+        {
+            cout << "Target: " << learner.classLabel << '\n';
+            cout << "Feature: " << learner.featureIdx << '\n';
+            cout << "Threshold: " << learner.threshold << '\n';
+            cout << "Error: " << learner.error << "\n\n";
+        }
+
+        for (int i = 0; i < train_samples; ++i)
+        {
+            predicted_class = compute_prediction(X.row(i), weak_learners);
+            if (predicted_class != Y.at(i))
+                ++err;
+        }
+
+        err /= train_samples;
+        cout << "Initial error: " << err << '\n';
+
+        alpha = 0.5f * log((1 - err) / err);
+
+        float s = 0;
+        for (int i = 0; i < train_samples; ++i)
+        {
+            predicted_class = compute_prediction(X.row(i), weak_learners);
+            weights.at(i) = weights.at(i) * exp(-alpha * (Y.at(i) == predicted_class ? 1 : -1));
+            s += weights.at(i);
+        }
+
+        for (int i = 0; i < train_samples; ++i)
+            weights.at(i) /= s;
+
+        alphas.push_back(alpha); 
+        selected_learners.push_back(weak_learners);
     }
+
+
 
     // TODO
     // Create generic functions for training weak learners for a genre DONE
@@ -348,9 +410,9 @@ int main()
     // 
     // Perform training for each genre DONE
     // 
-    // Clump together all test data, and run each track through all classifiers 
+    // Clump together all test data, and run each track through all classifiers DONE
     // 
-    // Assume for each track that its highest probability genre is the correct one and draw conclusions
+    // Assume for each track that its highest probability genre is the correct one and draw conclusions DONE
 
 
 	return 0;
