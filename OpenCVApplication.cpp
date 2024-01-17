@@ -24,12 +24,12 @@ std::string INPUT_CSV = "C:\\Users\\logoeje\\source\\repos\\PRS\\project_input\\
 struct WeakLearner
 {
     int featureIdx;
-    int threshold;
+    float threshold;
     int classLabel;
     float error;
     int classify(Mat_<int> X)
     {
-        return (X.at<int>(featureIdx) < threshold) ? classLabel : -classLabel;
+        return (X.at<int>(featureIdx) < threshold) ? 1 : -1;
     }
 };
 
@@ -46,34 +46,42 @@ struct ClassDescription
     int samples;
 };
 
-WeakLearner findWeakLearner(Mat_<Vec3b> img, Mat_<int> X, std::vector<int> Y, std::vector<float> weights, std::vector<FeatureDescription> feature_descriptions)
+std::vector<WeakLearner> findWeakLearners(Mat_<int> X, std::vector<int> Y, std::vector<float> weights, std::vector<FeatureDescription> feature_descriptions, int total_tracks)
 {
-    WeakLearner bestH;
+    std::vector<WeakLearner> bestLearners;
+    FeatureDescription current_description;
     float bestErr = LONG_MAX;
     float err;
-    int featureLimit;
+    float featureLimit;
     int z;
     
-    // select the inspected feature
-    for (int featureIdx = 0; featureIdx < X.cols; ++featureIdx)
+    // Select the class of interest
+    // i.e.: from 0 to 5, for each genre
+    // Hardcoded instead of passed as parameter for conveience
+    for (int classLabel = 0; classLabel < 6; ++classLabel)
     {
-        // select the threshold
-        // TODO: change to select a threshold in the relevant interval 
-        // i.e.: go over [-1.4324, 0.78234] in increments of 0.0005
-        featureLimit = featureIdx ? img.rows : img.cols;
-        for (int threshold = 0; threshold < featureLimit; ++threshold)
+        WeakLearner bestH;
+        bestErr = LONG_MAX;
+        // Select the inspected feature
+        for (int featureIdx = 0; featureIdx < X.cols; ++featureIdx)
         {
-            // select the class of interest
-            // TODO: change to match the possible labels
-            // i.e.: from 1 to 6, for each genre
-            for (int classLabel = -1; classLabel <= 1; classLabel += 2)
+            // Select a threshold in the relevant interval 
+            // i.e.: go over [-1.4324, 0.78234] in increments of 0.05
+            current_description = feature_descriptions.at(featureIdx);
+            featureLimit = current_description.max;
+            //std::cout << "Looking at feature " << featureIdx << '\n';
+            for (float threshold = current_description.min;
+                threshold < featureLimit;
+                threshold += current_description.increment)
             {
                 err = 0;
+                //std::cout << "Running through class " << classLabel << '\n';
                 // iterate through the tracks
-                for (int i = 0; i < X.rows; ++i)
+                for (int i = 0; i < total_tracks; ++i)
                 {
-                    z = (X(i, featureIdx) < threshold) ? classLabel : -classLabel;
-                    if (z * Y.at(i) < 0)
+                    z = (X(i, featureIdx) < threshold) ? 1 : -1;
+                    // Update the error if the label does not match the predicted class
+                    if (z * (Y.at(i) == classLabel ? 1 : -1) < 0)
                         err += weights.at(i);
                 }
                 if (err < bestErr)
@@ -83,9 +91,9 @@ WeakLearner findWeakLearner(Mat_<Vec3b> img, Mat_<int> X, std::vector<int> Y, st
                 }
             }
         }
+        bestLearners.push_back(bestH);
     }
-
-    return bestH;
+    return bestLearners;
 }
 
 struct Track
@@ -200,7 +208,8 @@ int main()
         "instrumentalness", "liveness", "valence", "tempo", "duration_ms" };
     int train_samples = 0;
     Mat_<float> X = Mat_<float>(MAX_TRACKS, RELEVANT_FEATURES);
-    Mat_<int> Y = Mat_<float>(MAX_TRACKS, 1);
+    vector<int> Y(MAX_TRACKS, 0);
+    vector<float> weights;
     bitset<MAX_TRACKS> train_data;
     int total_classes = 0;
     vector<ClassDescription> class_descriptions;
@@ -273,7 +282,6 @@ int main()
     }
 
     X.setTo(0);
-    Y.setTo(0);
     for (int i = 0; i < tracks.size(); ++i)
         if (train_data[i])
         {
@@ -289,8 +297,8 @@ int main()
             X(train_samples, 8) = aux.valence;
             X(train_samples, 9) = aux.tempo;
             X(train_samples, 10) = aux.duration_ms;
-            Y(train_samples, 0) = genre_mapping[aux.playlist_genre];
-            ++class_descriptions.at(Y(train_samples, 0)).samples;
+            Y.at(train_samples) = genre_mapping[aux.playlist_genre];
+            ++class_descriptions.at(Y.at(train_samples)).samples;
 
             for (int j = 0; j < RELEVANT_FEATURES; ++j)
             {
@@ -302,6 +310,12 @@ int main()
             ++train_samples;
         }
 
+    // Since features differ in meaning and magnitute, each increment is different
+    // The objective is to make each increment ~1% of the interval, in order to 
+    // limit the training and testing time (1% needed over 3 minutes)
+    for (auto& description : feature_descriptions)
+        description.increment = (description.max - description.min) / 100.0f;
+
     cout << "Training data metrics:\n";
     for (auto const& description : class_descriptions)
         std::cout << description.label << ": " << description.samples << " tracks\n";
@@ -309,8 +323,22 @@ int main()
 
     cout << "Feature data:\n";
     for (int i = 0; i < RELEVANT_FEATURES; ++i)
-        cout << relevant_feature_names.at(i) << ": " << feature_descriptions.at(i).min << " -> " << feature_descriptions.at(i).max << '\n';
+        cout << relevant_feature_names.at(i) << ": " << feature_descriptions.at(i).min << " -> " 
+            << feature_descriptions.at(i).max << " (inc: " << feature_descriptions.at(i).increment << ")\n";
     cout << '\n';
+
+    // Train the model
+    weights = vector<float>(train_samples, 1.0f / train_samples);
+    vector<WeakLearner> weak_learners = findWeakLearners(X, Y, weights, feature_descriptions, train_samples);
+
+    cout << "Selected learners:\n";
+    for (auto learner : weak_learners)
+    {
+        cout << "Target: " << learner.classLabel << '\n';
+        cout << "Feature: " << learner.featureIdx << '\n';
+        cout << "Threshold: " << learner.threshold << '\n';
+        cout << "Error: " << learner.error << "\n\n";
+    }
 
     // TODO
     // Create generic functions for training weak learners for a genre DONE
@@ -318,7 +346,7 @@ int main()
     // 
     // Split up each genre track set into training and test samples DONE
     // 
-    // Perform training for each genre separately
+    // Perform training for each genre DONE
     // 
     // Clump together all test data, and run each track through all classifiers 
     // 
